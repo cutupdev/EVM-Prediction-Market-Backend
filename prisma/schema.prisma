@@ -1,0 +1,112 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Wallet-centric user; no password auth in v0 (SIWE can be added later).
+model User {
+  id        String   @id @default(cuid())
+  address   String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  orders    Order[]
+}
+
+model Market {
+  id               String   @id @default(cuid())
+  chainId          Int
+  contractAddress  String
+  /// bytes32 market id on-chain, 0x-prefixed hex
+  onChainMarketId  String
+  question         String
+  description      String?
+  outcomeCount     Int      @default(2)
+  resolved         Boolean  @default(false)
+  winningOutcome   Int?
+  /// Raw resolution / metadata from chain (optional JSON string)
+  metadataJson     String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  orders Order[]
+  trades Trade[]
+
+  @@unique([chainId, contractAddress, onChainMarketId])
+  @@index([chainId, resolved])
+}
+
+enum OrderSide {
+  BUY
+  SELL
+}
+
+enum OrderStatus {
+  OPEN
+  PARTIALLY_FILLED
+  FILLED
+  CANCELLED
+}
+
+/// Off-chain CLOB order; optionally anchored to on-chain nonce / signature.
+model Order {
+  id           String      @id @default(cuid())
+  marketId     String
+  market       Market      @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  userId       String?
+  user         User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  makerAddress String
+  outcomeIndex Int
+  side         OrderSide
+  /// Price in basis points: 1 = 0.01%, 10000 = 100% (1.0)
+  priceBps     Int
+  /// Size in collateral smallest units (wei / token decimals — app convention)
+  sizeRaw      String
+  filledRaw    String      @default("0")
+  status       OrderStatus @default(OPEN)
+  signature    String?
+  chainNonce   String?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  tradesAsMaker Trade[] @relation("MakerOrder")
+  tradesAsTaker Trade[] @relation("TakerOrder")
+
+  @@index([marketId, status])
+  @@index([makerAddress])
+}
+
+model Trade {
+  id          String   @id @default(cuid())
+  marketId    String
+  market      Market   @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  outcomeIndex Int
+  priceBps    Int
+  sizeRaw     String
+  makerOrderId String
+  makerOrder  Order    @relation("MakerOrder", fields: [makerOrderId], references: [id], onDelete: Cascade)
+  takerOrderId String
+  takerOrder  Order    @relation("TakerOrder", fields: [takerOrderId], references: [id], onDelete: Cascade)
+  txHash      String?
+  createdAt   DateTime @default(now())
+
+  @@index([marketId, createdAt])
+}
+
+/// Cached chain events for reconciliation and UI history.
+model ChainEvent {
+  id          String   @id @default(cuid())
+  chainId     Int
+  blockNumber BigInt
+  txHash      String
+  logIndex    Int
+  eventName   String
+  payloadJson String
+  createdAt   DateTime @default(now())
+
+  @@unique([chainId, txHash, logIndex])
+  @@index([chainId, blockNumber])
+}
